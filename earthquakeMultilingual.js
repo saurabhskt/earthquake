@@ -1,119 +1,100 @@
-(function() {
-    // Create the connector object
+(function () {
     var myConnector = tableau.makeConnector();
+    var columnNames = [];
 
-    // Define the schema
-    myConnector.getSchema = function(schemaCallback) {
-        var cols = [{
-            id: "mag",
-            alias: "magnitude",
-            dataType: tableau.dataTypeEnum.float
-        }, {
-            id: "title",
-            alias: "title",
-            dataType: tableau.dataTypeEnum.string
-        }, {
-            id: "url",
-            alias: "url",
-            dataType: tableau.dataTypeEnum.string
-        }, {
-            id: "lat",
-            alias: "latitude",
-            dataType: tableau.dataTypeEnum.float
-        }, {
-            id: "lon",
-            alias: "longitude",
-            dataType: tableau.dataTypeEnum.float
-        }];
+    myConnector.getSchema = function (schemaCallback) {
+        var cols = columnNames.map(function(colName) {
+            return {
+                id: colName,
+                dataType: inferDataType(colName)
+            };
+        });
 
-        var tableInfo = {
-            id: "earthquakeFeed",
-            alias: "Earthquakes with magnitude greater than 4.5 in the last seven days",
+        var tableSchema = {
+            id: "kiaibiAPIData",
+            alias: "Kiabi API Data",
             columns: cols
         };
 
-        schemaCallback([tableInfo]);
+        schemaCallback([tableSchema]);
     };
 
-    // Download the data
+    function inferDataType(colName) {
+        if (colName.includes("Id") || colName.endsWith("Pcs") || colName.endsWith("Unit")) {
+            return tableau.dataTypeEnum.float;
+        } else if (colName.startsWith("year") || colName.startsWith("month") || colName.includes("Name") || colName.includes("Code")) {
+            return tableau.dataTypeEnum.string;
+        } else {
+            return tableau.dataTypeEnum.string; // Default to string for unknown types
+        }
+    }
+
     myConnector.getData = function(table, doneCallback) {
-        var mag = 0,
-            title = "",
-            url = "",
-            lat = 0,
-            lon = 0;
+        var connectionData = JSON.parse(tableau.connectionData);
+        var apiToken = tableau.password;
+        var oneYearId = connectionData.oneYearId;
+        var groupings = connectionData.groupings;
+        var typologies = connectionData.typologies;
+        var cellName = connectionData.cellName;
 
-        $.getJSON("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_week.geojson", function(resp) {
-            var feat = resp.features,
-                tableData = [];
+        var apiUrl = "http://xkiss02.kiabi.fr:83/capacity-planning/rs/gps/oneYearPlan/allocationSummary/searchAllocatedStatistics" +
+            "?oneYearId=" + encodeURIComponent(oneYearId) +
+            "&groupings=" + encodeURIComponent(groupings) +
+            "&typologies=" + encodeURIComponent(typologies) +
+            "&cellName=" + encodeURIComponent(cellName);
 
-            // Iterate over the JSON object
-            for (var i = 0, len = feat.length; i < len; i++) {
-                mag = feat[i].properties.mag;
-                title = feat[i].properties.title;
-                url = feat[i].properties.url;
-                lon = feat[i].geometry.coordinates[0];
-                lat = feat[i].geometry.coordinates[1];
+        $.ajax({
+            url: apiUrl,
+            type: "GET",
+            headers: {
+                "Authorization": "Bearer " + apiToken
+            },
+            success: function(resp) {
+                var feat = resp.result,
+                    tableData = [];
 
-                tableData.push({
-                    "mag": mag,
-                    "title": title,
-                    "url": url,
-                    "lon": lon,
-                    "lat": lat
-                });
+                // If columnNames is empty, populate it with the keys from the first result
+                if (columnNames.length === 0 && feat.length > 0) {
+                    columnNames = Object.keys(feat[0]);
+                }
 
+                for (var i = 0, len = feat.length; i < len; i++) {
+                    var row = {};
+                    columnNames.forEach(function(colName) {
+                        row[colName] = feat[i][colName];
+                    });
+                    tableData.push(row);
+                }
+
+                table.appendRows(tableData);
+                doneCallback();
+            },
+            error: function (xhr, status, error) {
+                tableau.abortWithError("Error while fetching data: " + error);
             }
-
-            table.appendRows(tableData);
-            doneCallback();
         });
     };
 
     tableau.registerConnector(myConnector);
 
-    // Create event listeners for when the user submits the form
-    $(document).ready(function() {
-        translateButton();
-        $("#submitButton").click(function() {
-            tableau.connectionName = "USGS Earthquake Feed"; // This will be the data source name in Tableau
-            tableau.submit(); // This sends the connector object to Tableau
+    // Ensure we're running in the Tableau WDC environment before initializing
+    if (tableau.phase === tableau.phaseEnum.interactivePhase || tableau.phase === tableau.phaseEnum.authPhase) {
+        tableau.initCallback();
+    }
+
+    // Use jQuery's document ready function to set up the submit button click handler
+    $(document).ready(function () {
+        $("#submitButton").click(function () {
+            var connectionData = {
+                oneYearId: $("#oneYearId").val(),
+                groupings: $("#groupings").val(),
+                typologies: $("#typologies").val(),
+                cellName: $("#cellName").val()
+            };
+            tableau.connectionData = JSON.stringify(connectionData);
+            tableau.password = $("#apiToken").val();
+            tableau.connectionName = "Kiabi API Data";
+            tableau.submit();
         });
     });
 })();
-
-// Values attached to the tableau object are loaded asyncronously.
-// Here we poll the value of locale until it is properly loaded
-// and defined, then we turn off the polling and translate the text.
-var translateButton = function() {
-    var pollLocale = setInterval(function() {
-        if (tableau.locale) {
-            switch (tableau.locale) {
-                case tableau.localeEnum.china:
-                    $("#submitButton").text("获取地震数据");
-                    break;
-                case tableau.localeEnum.germany:
-                    $("#submitButton").text("Erhalten Erdbebendaten!");
-                    break;
-                case tableau.localeEnum.brazil:
-                    $("#submitButton").text("Obter Dados de Terremoto!");
-                    break;
-                case tableau.localeEnum.france:
-                    $("#submitButton").text("Obtenir les Données de Séismes!");
-                    break;
-                case tableau.localeEnum.japan:
-                    $("#submitButton").text("地震データの取得");
-                    break;
-                case tableau.localeEnum.korea:
-                    $("#submitButton").text("지진 데이터 가져 오기");
-                    break;
-                case tableau.localeEnum.spain:
-                    $("#submitButton").text("Obtener Datos de Terremotos!");
-                    break;
-                default:
-                    $("#submitButton").text("Get Earthquake Data!");
-            }
-            clearInterval(pollLocale);
-        }
-    }, 10);
-};
